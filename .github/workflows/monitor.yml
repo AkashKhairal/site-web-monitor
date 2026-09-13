@@ -1,0 +1,84 @@
+name: Site Web Monitor
+
+on:
+  schedule:
+    # Run every 5 minutes (free & unlimited for PUBLIC repos)
+    # For PRIVATE repos: GitHub Free = 2,000 mins/month — use '*/30 * * * *' instead
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions UI
+
+# Prevent concurrent runs — only one check at a time
+concurrency:
+  group: site-web-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # ── Auth State ────────────────────────────────────────
+      # Decoded from the AUTH_STATE_B64 GitHub Secret.
+      # To update: run `python scripts/push_auth.py` from your PC.
+      - name: Restore auth state
+        run: |
+          mkdir -p data
+          if [ -z "$AUTH_STATE_B64" ]; then
+            echo "::error::AUTH_STATE_B64 secret is not set. Run 'python scripts/push_auth.py' first."
+            exit 1
+          fi
+          echo "$AUTH_STATE_B64" | base64 --decode > data/auth-state.json
+        env:
+          AUTH_STATE_B64: ${{ secrets.AUTH_STATE_B64 }}
+
+      # ── Monitor State ─────────────────────────────────────
+      # Persisted between runs via GitHub Actions cache.
+      # Tracks seen entry IDs to prevent duplicate notifications.
+      - name: Restore monitor state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/state.json
+          key: monitor-state-never-matches
+          restore-keys: |
+            monitor-state-
+
+      # ── Run the Check ─────────────────────────────────────
+      - name: Run monitor check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONPATH: .
+        run: python -m app.main --once
+
+      # ── Save State ────────────────────────────────────────
+      # Always save, even if the check failed (to persist
+      # auth_failure_notified and prevent duplicate alerts).
+      - name: Save monitor state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/state.json
+          key: monitor-state-${{ github.run_id }}

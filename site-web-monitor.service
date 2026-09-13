@@ -1,0 +1,41 @@
+[Unit]
+Description=Site Web Monitor — SITE WEB Dashboard Monitoring Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=siteweb
+Group=siteweb
+
+# Working directory — where the application code lives
+WorkingDirectory=/opt/site-web-monitor
+
+# Python virtual environment and main script
+ExecStart=/opt/site-web-monitor/venv/bin/python -m app.main
+Environment=PYTHONPATH=/opt/site-web-monitor
+
+# Load environment variables (Telegram tokens, config)
+EnvironmentFile=/opt/site-web-monitor-private/.env
+
+# Private directory for auth state and runtime data
+Environment=PRIVATE_DIR=/opt/site-web-monitor-private
+
+# Restart policy
+Restart=on-failure
+RestartSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/site-web-monitor-private
+ReadWritePaths=/opt/site-web-monitor/data
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=site-web-monitor
+
+[Install]
+WantedBy=multi-user.target

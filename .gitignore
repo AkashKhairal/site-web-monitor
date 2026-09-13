@@ -1,0 +1,41 @@
+# -------------------------------------------------------
+# Git Ignore — Site Web Monitor
+# -------------------------------------------------------
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment / secrets
+.env
+
+# Private runtime data
+data/auth-state.json
+data/state.json
+data/health.json
+
+# Sensitive debug artifacts (DOM dumps, screenshots)
+# These may contain authenticated page content — never commit.
+data/debug/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
