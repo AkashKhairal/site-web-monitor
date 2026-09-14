@@ -1,9 +1,6 @@
 name: Site Web Monitor
 
 on:
-  schedule:
-    # Run periodically via GitHub Actions scheduler
-    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       duration:
