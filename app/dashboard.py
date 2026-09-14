@@ -14,7 +14,8 @@ from typing import Optional
 
 from playwright.async_api import Page
 
-from app.config import TARGET_DASHBOARD_URL
+from app.auth import AuthenticationError, login
+from app.config import MTF_EMAIL, MTF_PASSWORD, TARGET_DASHBOARD_URL
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,6 @@ logger = logging.getLogger(__name__)
 SITE_WEB_COUNT_SELECTOR = "#siteHistoryData"
 SITE_WEB_CARD_SELECTOR = 'a.dashboard-stat[href="sites.php"]'
 SITE_WEB_HISTORY_URL = "sites.php"
-
-
-class AuthenticationError(Exception):
-    """Raised when the session has expired and re-authentication is needed."""
-    pass
 
 
 class ExtractionError(Exception):
@@ -55,6 +51,16 @@ async def check_authentication(page: Page) -> bool:
     if "/login" in current_url:
         logger.warning("Session appears expired — redirected to login page")
         return False
+
+    try:
+        # If login form email field is present, we are logged out
+        login_input = await page.query_selector("#email")
+        if login_input:
+            logger.warning("Session appears expired — login form detected")
+            return False
+    except Exception:
+        pass
+
     return True
 
 
@@ -62,17 +68,23 @@ async def navigate_to_dashboard(page: Page) -> None:
     """Navigate to the dashboard and wait for it to load.
 
     Raises:
-        AuthenticationError: If the session has expired.
+        AuthenticationError: If the session has expired and cannot be restored.
     """
     logger.info("Navigating to dashboard")
     await page.goto(TARGET_DASHBOARD_URL, wait_until="domcontentloaded")
     await page.wait_for_load_state("networkidle")
 
     if not await check_authentication(page):
-        raise AuthenticationError(
-            "Session expired — redirected to login page. "
-            "Run 'python -m setup.auth_setup' to re-authenticate."
-        )
+        if MTF_EMAIL and MTF_PASSWORD:
+            logger.info("Session expired — performing automated re-login...")
+            await login(page, MTF_EMAIL, MTF_PASSWORD)
+            await page.goto(TARGET_DASHBOARD_URL, wait_until="domcontentloaded")
+            await page.wait_for_load_state("networkidle")
+        else:
+            raise AuthenticationError(
+                "Session expired — redirected to login page. "
+                "Run 'python -m setup.auth_setup' or configure MTF credentials."
+            )
 
     logger.debug("Dashboard loaded successfully at: %s", page.url)
 
@@ -92,12 +104,28 @@ async def get_site_web_status(page: Page) -> SiteWebStatus:
     """
     # Verify we're still authenticated
     if not await check_authentication(page):
-        raise AuthenticationError(
-            "Session expired during dashboard check."
-        )
+        if MTF_EMAIL and MTF_PASSWORD:
+            logger.info("Session expired before extraction — re-authenticating...")
+            await login(page, MTF_EMAIL, MTF_PASSWORD)
+            await page.goto(TARGET_DASHBOARD_URL, wait_until="domcontentloaded")
+            await page.wait_for_load_state("networkidle")
+        else:
+            raise AuthenticationError("Session expired during dashboard check.")
 
     # Locate the count element by its stable ID
     count_element = await page.query_selector(SITE_WEB_COUNT_SELECTOR)
+
+    if count_element is None:
+        # Check if the page actually booted us back to login
+        if not await check_authentication(page):
+            if MTF_EMAIL and MTF_PASSWORD:
+                logger.info("Count element missing due to login redirect — re-authenticating...")
+                await login(page, MTF_EMAIL, MTF_PASSWORD)
+                await page.goto(TARGET_DASHBOARD_URL, wait_until="domcontentloaded")
+                await page.wait_for_load_state("networkidle")
+                count_element = await page.query_selector(SITE_WEB_COUNT_SELECTOR)
+            else:
+                raise AuthenticationError("Session expired during dashboard check.")
 
     if count_element is None:
         raise ExtractionError(
@@ -105,6 +133,7 @@ async def get_site_web_status(page: Page) -> SiteWebStatus:
             f"(selector: {SITE_WEB_COUNT_SELECTOR}). "
             "The dashboard HTML structure may have changed."
         )
+
 
     # Extract the raw text
     raw_text = await count_element.inner_text()

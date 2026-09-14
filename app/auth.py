@@ -17,16 +17,83 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from app.config import AUTH_STATE_PATH, TARGET_LOGIN_URL
+from app.config import (
+    AUTH_STATE_PATH,
+    MTF_EMAIL,
+    MTF_PASSWORD,
+    TARGET_LOGIN_URL,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class AuthenticationError(Exception):
+    """Raised when authentication fails or session expires."""
+    pass
+
+
+async def login(
+    page: Page,
+    email: Optional[str] = None,
+    password: Optional[str] = None,
+) -> None:
+    """Perform automated login to Mobile Tracker Free.
+
+    Args:
+        page: Active Playwright Page instance.
+        email: Optional email override; defaults to MTF_EMAIL.
+        password: Optional password override; defaults to MTF_PASSWORD.
+
+    Raises:
+        AuthenticationError: If login fails or credentials are invalid.
+    """
+    user_email = email or MTF_EMAIL
+    user_pass = password or MTF_PASSWORD
+    if not user_email or not user_pass:
+        raise AuthenticationError(
+            "Automated login failed: MTF_EMAIL or MTF_PASSWORD not configured."
+        )
+
+    logger.info("Performing automated login for %s", user_email)
+    await page.goto(TARGET_LOGIN_URL, wait_until="domcontentloaded")
+
+    # Wait for the login form elements
+    try:
+        await page.wait_for_selector("#email", timeout=15000)
+        await page.fill("#email", user_email)
+        await page.fill("#password", user_pass)
+        await page.click("#btnLogin")
+    except Exception as exc:
+        raise AuthenticationError(f"Error submitting login form: {exc}") from exc
+
+    # Wait for navigation away from login (to dashboard or authenticated route)
+    try:
+        await page.wait_for_url(lambda u: "/login" not in u.lower(), timeout=20000)
+    except Exception as exc:
+        error_msg = ""
+        try:
+            error_elem = await page.query_selector("#errorLogin")
+            if error_elem:
+                error_msg = (await error_elem.inner_text()).strip()
+        except Exception:
+            pass
+
+        if error_msg:
+            raise AuthenticationError(f"Login rejected by website: {error_msg}") from exc
+        raise AuthenticationError(
+            f"Timed out waiting for login redirect. Current URL: {page.url}"
+        ) from exc
+
+    await page.wait_for_load_state("networkidle")
+    logger.info("Automated login successful. Current URL: %s", page.url)
 
 
 class BrowserManager:
     """Manages Playwright browser lifecycle.
 
     Maintains a single Playwright instance, browser, context, and page.
-    Supports creating authenticated contexts from saved storage state.
+    Supports creating authenticated contexts from saved storage state
+    or performing automated credential-based login.
     """
 
     def __init__(self) -> None:
@@ -72,16 +139,31 @@ class BrowserManager:
         return self._page
 
     async def start_authenticated(self, *, headless: bool = True) -> Page:
-        """Launch the browser with saved authentication state.
+        """Launch the browser with automated login or saved authentication state.
+
+        If MTF_EMAIL and MTF_PASSWORD are configured, performs automated login.
+        Otherwise, falls back to saved storage state in AUTH_STATE_PATH.
 
         Raises:
-            FileNotFoundError: If no saved auth state exists.
+            FileNotFoundError: If neither credentials nor saved auth state exists.
         """
-        if not AUTH_STATE_PATH.is_file():
+        has_creds = bool(MTF_EMAIL and MTF_PASSWORD)
+        has_state = AUTH_STATE_PATH.is_file()
+
+        if not has_creds and not has_state:
             raise FileNotFoundError(
-                f"No authentication state found at {AUTH_STATE_PATH}. "
-                "Run 'python -m setup.auth_setup' first."
+                f"No credentials (MTF_EMAIL/MTF_PASSWORD) or authentication state found at {AUTH_STATE_PATH}. "
+                "Set MTF_EMAIL and MTF_PASSWORD or run 'python -m setup.auth_setup' first."
             )
+
+        if has_creds:
+            # Fresh automated login with credentials
+            page = await self.start(headless=headless)
+            await login(page, MTF_EMAIL, MTF_PASSWORD)
+            await self.save_storage_state(AUTH_STATE_PATH)
+            return page
+
+        # Fallback to saved storage state
         return await self.start(headless=headless, storage_state=AUTH_STATE_PATH)
 
     async def save_storage_state(self, path: Optional[Path] = None) -> None:

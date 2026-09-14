@@ -41,18 +41,24 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       # ── Auth State ────────────────────────────────────────
-      # Decoded from the AUTH_STATE_B64 GitHub Secret.
-      # To update: run `python scripts/push_auth.py` from your PC.
+      # Either decoded from AUTH_STATE_B64 or uses automated login via
+      # MTF_EMAIL and MTF_PASSWORD secrets.
       - name: Restore auth state
         run: |
           mkdir -p data
-          if [ -z "$AUTH_STATE_B64" ]; then
-            echo "::error::AUTH_STATE_B64 secret is not set. Run 'python scripts/push_auth.py' first."
+          if [ -n "$AUTH_STATE_B64" ]; then
+            echo "$AUTH_STATE_B64" | base64 --decode > data/auth-state.json
+            echo "Restored auth-state.json from AUTH_STATE_B64 secret."
+          elif [ -n "$MTF_EMAIL" ] && [ -n "$MTF_PASSWORD" ]; then
+            echo "Automated login credentials configured (MTF_EMAIL / MTF_PASSWORD)."
+          else
+            echo "::error::Neither AUTH_STATE_B64 nor MTF_EMAIL/MTF_PASSWORD secrets are set."
             exit 1
           fi
-          echo "$AUTH_STATE_B64" | base64 --decode > data/auth-state.json
         env:
           AUTH_STATE_B64: ${{ secrets.AUTH_STATE_B64 }}
+          MTF_EMAIL: ${{ secrets.MTF_EMAIL }}
+          MTF_PASSWORD: ${{ secrets.MTF_PASSWORD }}
 
       # ── Monitor State ─────────────────────────────────────
       # Persisted between runs via GitHub Actions cache.
@@ -70,6 +76,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MTF_EMAIL: ${{ secrets.MTF_EMAIL }}
+          MTF_PASSWORD: ${{ secrets.MTF_PASSWORD }}
           PYTHONPATH: .
         run: python -m app.main --once
 

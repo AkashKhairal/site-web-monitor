@@ -45,6 +45,12 @@ CHECK_INTERVAL_SECONDS: int = int(os.environ.get("CHECK_INTERVAL_SECONDS", "300"
 MAX_RETRIES: int = int(os.environ.get("MAX_RETRIES", "4"))
 
 # ---------------------------------------------------------------------------
+# Mobile Tracker Free Credentials (for automated login)
+# ---------------------------------------------------------------------------
+MTF_EMAIL: str = os.environ.get("MTF_EMAIL", "")
+MTF_PASSWORD: str = os.environ.get("MTF_PASSWORD", "")
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 # Private directory for auth state — outside repo on production
@@ -66,5 +72,6 @@ def validate_telegram_config() -> bool:
 
 
 def validate_auth_state() -> bool:
-    """Return True if a saved authentication state file exists."""
-    return AUTH_STATE_PATH.is_file()
+    """Return True if login credentials or a saved auth state file exists."""
+    return bool(MTF_EMAIL and MTF_PASSWORD) or AUTH_STATE_PATH.is_file()
+

@@ -29,6 +29,8 @@ from app.config import (
     CHECK_INTERVAL_SECONDS,
     DEBUG_DIR,
     MAX_RETRIES,
+    MTF_EMAIL,
+    MTF_PASSWORD,
     validate_auth_state,
     validate_telegram_config,
 )
@@ -79,14 +81,15 @@ class Monitor:
         logger.info("  Debug: %s", self.debug)
         logger.info("  Check interval: %ds", CHECK_INTERVAL_SECONDS)
         logger.info("  Auth state: %s", AUTH_STATE_PATH)
+        logger.info("  Automated login: %s", bool(MTF_EMAIL and MTF_PASSWORD))
         logger.info("  Telegram configured: %s", validate_telegram_config())
         logger.info("=" * 60)
 
         # Validate prerequisites
         if not validate_auth_state():
             logger.error(
-                "No authentication state found. "
-                "Run 'python -m setup.auth_setup' first."
+                "No authentication state or credentials found. "
+                "Set MTF_EMAIL and MTF_PASSWORD or run 'python -m setup.auth_setup' first."
             )
             return
 
