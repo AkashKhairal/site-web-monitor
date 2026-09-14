@@ -37,6 +37,62 @@ class WebsiteEntry:
     browser: Optional[str] = None    # e.g., "Chrome"
 
 
+async def _show_all_entries(page: Page) -> None:
+    """Select 'Show All' in the DataTable pagination dropdown.
+
+    DataTables typically show 10 entries per page by default.
+    This selects the highest available option (e.g., 100, All, -1)
+    to ensure we can see every entry in the table.
+    """
+    try:
+        # DataTables uses a <select> element with name="tabData_length"
+        # or class "dataTables_length" to control entries per page.
+        length_select = await page.query_selector(
+            "select[name='tabData_length'], "
+            "#tabData_length select, "
+            ".dataTables_length select"
+        )
+        if length_select is None:
+            logger.debug("No DataTable length selector found — table may show all entries already")
+            return
+
+        # Get all available options
+        options = await length_select.query_selector_all("option")
+        if not options:
+            logger.debug("No options in length selector")
+            return
+
+        # Find the best option: prefer -1 (Show All), otherwise pick the largest value
+        best_value = None
+        best_numeric = 0
+        for opt in options:
+            value = await opt.get_attribute("value")
+            if value == "-1":
+                # -1 is the standard DataTables value for "Show All"
+                best_value = "-1"
+                break
+            try:
+                num = int(value)
+                if num > best_numeric:
+                    best_numeric = num
+                    best_value = value
+            except (ValueError, TypeError):
+                continue
+
+        if best_value:
+            await length_select.select_option(best_value)
+            # Wait for DataTable to re-render after changing page length
+            await page.wait_for_timeout(1000)
+            await page.wait_for_load_state("networkidle")
+            logger.info("DataTable set to show %s entries", "all" if best_value == "-1" else best_value)
+        else:
+            logger.debug("Could not determine best page length option")
+
+    except Exception as exc:
+        # Non-fatal: if we can't change pagination, we still extract what's visible
+        logger.warning("Could not change DataTable page length: %s", exc)
+
+
 async def get_all_visible_entries(page: Page) -> List[WebsiteEntry]:
     """Extract all visible entries from the history table.
 
@@ -55,6 +111,9 @@ async def get_all_visible_entries(page: Page) -> List[WebsiteEntry]:
             f"Could not find history table (selector: {HISTORY_TABLE_SELECTOR}). "
             "The history page HTML structure may have changed."
         )
+
+    # Show all entries (DataTable defaults to 10 per page)
+    await _show_all_entries(page)
 
     # Get all data rows (skip header row)
     rows = await page.query_selector_all(HISTORY_ROW_SELECTOR)
