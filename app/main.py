@@ -62,10 +62,14 @@ class Monitor:
         dry_run: bool = False,
         debug: bool = False,
         once: bool = False,
+        duration: Optional[int] = None,
+        interval: Optional[int] = None,
     ) -> None:
         self.dry_run = dry_run
         self.debug = debug
         self.once = once
+        self.duration = duration
+        self.interval = interval or CHECK_INTERVAL_SECONDS
         self.bm: Optional[BrowserManager] = None
         self.state: Optional[MonitorState] = None
         self._shutdown = False
@@ -79,7 +83,9 @@ class Monitor:
         logger.info("Site Web Monitor starting")
         logger.info("  Dry run: %s", self.dry_run)
         logger.info("  Debug: %s", self.debug)
-        logger.info("  Check interval: %ds", CHECK_INTERVAL_SECONDS)
+        logger.info("  Check interval: %ds", self.interval)
+        if self.duration:
+            logger.info("  Session duration: %ds", self.duration)
         logger.info("  Auth state: %s", AUTH_STATE_PATH)
         logger.info("  Automated login: %s", bool(MTF_EMAIL and MTF_PASSWORD))
         logger.info("  Telegram configured: %s", validate_telegram_config())
@@ -105,10 +111,14 @@ class Monitor:
         if self.once:
             # Single check cycle for CI/CD (e.g., GitHub Actions)
             await self._run_single_cycle()
+        elif self.duration:
+            # Fixed duration loop (e.g., for GitHub Actions multi-cycle sessions)
+            await self._run_duration_loop()
         else:
             # Continuous monitoring loop
             self._setup_signal_handlers()
             await self._monitor_loop()
+
 
     def _setup_signal_handlers(self) -> None:
         """Register handlers for graceful shutdown."""
@@ -218,6 +228,56 @@ class Monitor:
                 logger.info("State saved")
             logger.info("Single cycle done — exiting")
 
+    async def _run_duration_loop(self) -> None:
+        """Run check cycles in a loop for a fixed duration (e.g. in GitHub Actions)."""
+        import time
+
+        start_time = time.time()
+        logger.info(
+            "Running monitoring loop for duration=%ds with interval=%ds",
+            self.duration,
+            self.interval,
+        )
+        self._setup_signal_handlers()
+
+        try:
+            await self._ensure_browser()
+            while not self._shutdown and (time.time() - start_time) < self.duration:
+                try:
+                    await self._run_check_cycle()
+                    self._consecutive_errors = 0
+                    self._last_error_notified = None
+                except AuthenticationError as exc:
+                    logger.error("Authentication failure: %s", exc)
+                    await self._handle_auth_failure()
+                except ExtractionError as exc:
+                    logger.error("Extraction failure: %s", exc)
+                    self._consecutive_errors += 1
+                    await self._handle_extraction_error(str(exc))
+                except Exception as exc:
+                    logger.exception("Unexpected error in monitoring cycle")
+                    self._consecutive_errors += 1
+                    await self._handle_unexpected_error(str(exc))
+
+                if self._shutdown or (time.time() - start_time) >= self.duration:
+                    break
+
+                remaining = int(self.duration - (time.time() - start_time))
+                sleep_time = min(self.interval, max(5, remaining))
+                logger.info(
+                    "Next check in %ds (session remaining: %ds)",
+                    sleep_time,
+                    remaining,
+                )
+                await self._interruptible_sleep(sleep_time)
+
+        finally:
+            await self._close_browser()
+            if self.state is not None:
+                save_state(self.state)
+                logger.info("State saved")
+            logger.info("Duration loop completed — exiting")
+
     async def _run_check_cycle(self) -> None:
         """Execute one monitoring check cycle."""
         logger.info("--- Monitoring cycle start ---")
@@ -225,22 +285,9 @@ class Monitor:
         await self._ensure_browser()
         page = self.bm.page
 
-        # Navigate to dashboard and get SITE WEB count
-        await navigate_to_dashboard(page)
-        status = await get_site_web_status(page)
-
-        current_count = status.count
-        logger.info(
-            "SITE WEB count: current=%d, previous=%d",
-            current_count, self.state.last_count,
-        )
-
         # First run: establish baseline, no alerts
         if self.state.is_first_run:
-            logger.info(
-                "First run — establishing baseline (count=%d). No alerts.",
-                current_count,
-            )
+            logger.info("First run — establishing baseline from history table. No alerts.")
             await navigate_to_history(page)
             from app.history import get_all_visible_entries
             all_entries = await get_all_visible_entries(page)
@@ -249,7 +296,7 @@ class Monitor:
             latest = all_entries[0] if all_entries else None
             update_state_baseline(
                 self.state,
-                count=current_count,
+                count=len(all_entries),
                 entry_ids=all_ids,
                 latest_website=latest.website if latest else None,
                 latest_timestamp=latest.timestamp if latest else None,
@@ -258,58 +305,17 @@ class Monitor:
             logger.info("Baseline established with %d seen entry IDs", len(all_ids))
             return
 
-        # Check for new activity
-        #
-        # IMPORTANT: The dashboard count resets to 0 whenever sites.php is
-        # opened (i.e., after we view the history page). This means the
-        # typical cycle is:
-        #   count=0 → new activity → count=3 → we open history → count=0
-        #
-        # Our primary dedup key is seen_entry_ids, NOT the count.
-        # The count is just a trigger to check history.
-        #
-        if current_count > 0 and current_count > self.state.last_count:
-            increase = current_count - self.state.last_count
-            logger.info(
-                "Count increased by %d (from %d to %d) — checking history",
-                increase, self.state.last_count, current_count,
-            )
-            await self._process_new_entries(page, current_count)
-
-        elif current_count == 0 and self.state.last_count > 0:
-            # Count reset to 0 after we opened sites.php — this is normal
-            logger.info(
-                "Count reset to 0 (was %d) — normal after viewing history",
-                self.state.last_count,
-            )
-            self.state.last_count = 0
-            save_state(self.state)
-
-        elif current_count == self.state.last_count:
-            logger.info("No change in count (%d) — nothing to do", current_count)
-
-        elif current_count < self.state.last_count:
-            logger.warning(
-                "Count decreased from %d to %d — possible data reset. "
-                "Updating baseline.",
-                self.state.last_count, current_count,
-            )
-            # Re-baseline on count decrease (e.g., data was deleted)
-            self.state.last_count = current_count
-            save_state(self.state)
-
-    async def _process_new_entries(self, page, current_count: int) -> None:
-        """Navigate to history and process any new entries."""
+        # Check history directly — this is the true ground truth.
+        # Dashboard badge counts can reset to 0 or fail to increment,
+        # so comparing against seen_entry_ids is the only 100% reliable method.
         await navigate_to_history(page)
         new_entries = await get_new_entries(page, self.state.seen_entry_ids)
 
         if not new_entries:
             logger.info(
-                "Count increased but no new entries found by ID. "
-                "Updating count baseline."
+                "No new entries found (%d already tracked) — nothing to do",
+                len(self.state.seen_entry_ids),
             )
-            self.state.last_count = current_count
-            save_state(self.state)
             return
 
         logger.info("Found %d new entries to process", len(new_entries))
@@ -319,7 +325,7 @@ class Monitor:
 
         # Send notification — only update state after confirmed delivery
         notification_sent = await notify_new_entries(
-            new_entries, current_count, dry_run=self.dry_run
+            new_entries, len(new_entries), dry_run=self.dry_run
         )
 
         if notification_sent:
@@ -327,15 +333,15 @@ class Monitor:
             latest = new_entries[-1]  # Most recent after sorting
             update_state_baseline(
                 self.state,
-                count=current_count,
+                count=len(new_entries),
                 entry_ids=new_ids,
                 latest_website=latest.website,
                 latest_timestamp=latest.timestamp,
             )
             save_state(self.state)
             logger.info(
-                "State updated: count=%d, total seen IDs=%d",
-                current_count, len(self.state.seen_entry_ids),
+                "State updated: %d new entries processed, total seen IDs=%d",
+                len(new_entries), len(self.state.seen_entry_ids),
             )
         else:
             # Telegram failed — do NOT update state (§35)
@@ -343,6 +349,7 @@ class Monitor:
                 "Telegram notification failed — state NOT updated. "
                 "Will retry on next cycle."
             )
+
 
     async def _handle_auth_failure(self) -> None:
         """Handle authentication failure with deduplication."""
@@ -443,6 +450,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run a single check cycle and exit (for CI/CD environments)",
     )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=None,
+        help="Run monitoring loop for a fixed duration in seconds (e.g., 900 for 15 min), then exit",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help="Interval in seconds between checks in loop/duration mode",
+    )
     return parser.parse_args()
 
 
@@ -451,8 +470,15 @@ def main() -> None:
     args = parse_args()
     setup_logging(debug=args.debug)
 
-    monitor = Monitor(dry_run=args.dry_run, debug=args.debug, once=args.once)
+    monitor = Monitor(
+        dry_run=args.dry_run,
+        debug=args.debug,
+        once=args.once,
+        duration=args.duration,
+        interval=args.interval,
+    )
     asyncio.run(monitor.start())
+
 
 
 if __name__ == "__main__":

@@ -2,11 +2,14 @@ name: Site Web Monitor
 
 on:
   schedule:
-    # Run every 5 minutes (free & unlimited for PUBLIC repos)
-    # For PRIVATE repos: GitHub Free = 2,000 mins/month — use '*/30 * * * *' instead
+    # Run periodically via GitHub Actions scheduler
     - cron: '*/5 * * * *'
   workflow_dispatch:
-    # Allow manual trigger from GitHub Actions UI
+    inputs:
+      duration:
+        description: 'Duration to run monitor session in seconds (default: 900 = 15 min; 0 for single check)'
+        required: false
+        default: '900'
 
 # Prevent concurrent runs — only one check at a time
 concurrency:
@@ -16,7 +19,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+
 
     steps:
       - name: Checkout code
@@ -78,8 +82,15 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MTF_EMAIL: ${{ secrets.MTF_EMAIL }}
           MTF_PASSWORD: ${{ secrets.MTF_PASSWORD }}
+          SESSION_DURATION: ${{ inputs.duration || '900' }}
           PYTHONPATH: .
-        run: python -m app.main --once
+        run: |
+          if [ "$SESSION_DURATION" = "0" ]; then
+            python -m app.main --once
+          else
+            python -m app.main --duration "$SESSION_DURATION" --interval 45
+          fi
+
 
       # ── Save State ────────────────────────────────────────
       # Always save, even if the check failed (to persist

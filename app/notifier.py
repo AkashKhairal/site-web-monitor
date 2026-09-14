@@ -84,32 +84,33 @@ async def send_message(text: str, *, dry_run: bool = False) -> bool:
         return False
 
 
-def format_single_entry(entry: WebsiteEntry, count: int) -> str:
+def format_single_entry(entry: WebsiteEntry, count: int = 1) -> str:
     """Format a notification for a single new website entry."""
     time_str = entry.timestamp or "Not available"
+    browser_str = f" ({entry.browser})" if entry.browser else ""
     return (
         "🔔 <b>New Website Detected</b>\n"
         "\n"
-        f"SITE WEB Count: {count}\n"
-        f"Website: {entry.website}\n"
-        f"Time: {time_str}"
+        f"<b>Website:</b> {entry.website}\n"
+        f"<b>Time:</b> {time_str}{browser_str}"
     )
 
 
-def format_multiple_entries(entries: List[WebsiteEntry], count: int) -> str:
+def format_multiple_entries(entries: List[WebsiteEntry], count: int = 0) -> str:
     """Format a notification for multiple new website entries."""
     lines = [
         "🔔 <b>New Website Activity</b>\n",
-        f"SITE WEB Count: {count}",
-        f"New entries: {len(entries)}\n",
+        f"<b>New entries:</b> {len(entries)}\n",
     ]
 
     for i, entry in enumerate(entries, 1):
         time_str = entry.timestamp or "Not available"
+        browser_str = f" ({entry.browser})" if entry.browser else ""
         lines.append(f"{i}. {entry.website}")
-        lines.append(f"   {time_str}\n")
+        lines.append(f"   <i>{time_str}{browser_str}</i>\n")
 
     return "\n".join(lines)
+
 
 
 def format_auth_failure() -> str:

@@ -158,9 +158,18 @@ async def navigate_to_history(page: Page) -> None:
     # Verify we're on the right page
     current_url = page.url
     if "/login" in current_url.lower():
-        from app.dashboard import AuthenticationError
-        raise AuthenticationError(
-            "Redirected to login while accessing history page."
-        )
+        from app.auth import AuthenticationError, login
+        from app.config import MTF_EMAIL, MTF_PASSWORD
 
-    logger.debug("History page loaded at: %s", current_url)
+        if MTF_EMAIL and MTF_PASSWORD:
+            logger.info("Session expired while accessing history — re-authenticating...")
+            await login(page, MTF_EMAIL, MTF_PASSWORD)
+            await page.goto(history_url, wait_until="domcontentloaded")
+            await page.wait_for_load_state("networkidle")
+        else:
+            raise AuthenticationError(
+                "Redirected to login while accessing history page."
+            )
+
+    logger.debug("History page loaded at: %s", page.url)
+
