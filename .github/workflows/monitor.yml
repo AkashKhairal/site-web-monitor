@@ -82,10 +82,16 @@ jobs:
           SESSION_DURATION: ${{ inputs.duration || '720' }}
           PYTHONPATH: .
         run: |
-          if [ "$SESSION_DURATION" = "0" ]; then
+          DUR="${SESSION_DURATION:-660}"
+          if [ "$DUR" -gt 660 ] 2>/dev/null; then
+            echo "Notice: Capping session duration from ${DUR}s to 660s to maintain clean 15m cron cadence."
+            DUR=660
+          fi
+
+          if [ "$DUR" = "0" ]; then
             python -m app.main --once
           else
-            python -m app.main --duration "$SESSION_DURATION" --interval 45
+            python -m app.main --duration "$DUR" --interval 45
           fi
 
 
