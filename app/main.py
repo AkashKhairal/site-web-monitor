@@ -241,7 +241,6 @@ class Monitor:
         self._setup_signal_handlers()
 
         try:
-            await self._ensure_browser()
             while not self._shutdown and (time.time() - start_time) < self.duration:
                 try:
                     await self._run_check_cycle()

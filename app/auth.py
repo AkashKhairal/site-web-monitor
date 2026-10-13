@@ -5,6 +5,7 @@ Provides helpers to launch Chromium via Playwright, create authenticated
 browser contexts using saved storage state, and manage the browser lifecycle.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -55,7 +56,24 @@ async def login(
         )
 
     logger.info("Performing automated login for %s", user_email)
-    await page.goto(TARGET_LOGIN_URL, wait_until="domcontentloaded")
+    max_nav_retries = 3
+    for attempt in range(1, max_nav_retries + 1):
+        try:
+            logger.info("Navigating to login page (attempt %d/%d)...", attempt, max_nav_retries)
+            await page.goto(TARGET_LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+            break
+        except Exception as exc:
+            if attempt == max_nav_retries:
+                raise AuthenticationError(
+                    f"Failed to navigate to login page after {max_nav_retries} attempts: {exc}"
+                ) from exc
+            logger.warning(
+                "Navigation to login page failed (attempt %d/%d): %s. Retrying in 5s...",
+                attempt,
+                max_nav_retries,
+                exc,
+            )
+            await asyncio.sleep(5)
 
     # Wait for the login form elements
     try:
@@ -68,7 +86,7 @@ async def login(
 
     # Wait for navigation away from login (to dashboard or authenticated route)
     try:
-        await page.wait_for_url(lambda u: "/login" not in u.lower(), timeout=20000)
+        await page.wait_for_url(lambda u: "/login" not in u.lower(), timeout=30000)
     except Exception as exc:
         error_msg = ""
         try:
@@ -84,7 +102,10 @@ async def login(
             f"Timed out waiting for login redirect. Current URL: {page.url}"
         ) from exc
 
-    await page.wait_for_load_state("networkidle")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        logger.debug("networkidle timeout reached — continuing")
     logger.info("Automated login successful. Current URL: %s", page.url)
 
 

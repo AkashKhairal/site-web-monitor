@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       duration:
-        description: 'Duration to run monitor session in seconds (default: 900 = 15 min; 0 for single check)'
+        description: 'Duration to run monitor session in seconds (default: 720 = 12 min; 0 for single check)'
         required: false
-        default: '900'
+        default: '720'
 
 # Prevent concurrent runs — only one check at a time
 concurrency:
@@ -79,7 +79,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MTF_EMAIL: ${{ secrets.MTF_EMAIL }}
           MTF_PASSWORD: ${{ secrets.MTF_PASSWORD }}
-          SESSION_DURATION: ${{ inputs.duration || '900' }}
+          SESSION_DURATION: ${{ inputs.duration || '720' }}
           PYTHONPATH: .
         run: |
           if [ "$SESSION_DURATION" = "0" ]; then
