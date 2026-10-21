@@ -45,11 +45,14 @@ class SiteWebStatus:
 async def check_authentication(page: Page) -> bool:
     """Check if the current page indicates an authenticated session.
 
-    Returns True if authenticated, False if redirected to login.
+    Returns True if authenticated, False if redirected away from dashboard.
     """
     current_url = page.url.lower()
-    if "/login" in current_url:
-        logger.warning("Session appears expired — redirected to login page")
+    if "/login" in current_url or "/dashboard" not in current_url:
+        logger.warning(
+            "Session appears expired — redirected to non-dashboard URL: %s",
+            page.url,
+        )
         return False
 
     try:
@@ -112,18 +115,24 @@ async def get_site_web_status(page: Page) -> SiteWebStatus:
         else:
             raise AuthenticationError("Session expired during dashboard check.")
 
-    # Locate the count element by its stable ID
-    count_element = await page.query_selector(SITE_WEB_COUNT_SELECTOR)
+    # Locate the count element by its stable ID (wait up to 10s)
+    try:
+        count_element = await page.wait_for_selector(SITE_WEB_COUNT_SELECTOR, timeout=10000)
+    except Exception:
+        count_element = None
 
     if count_element is None:
-        # Check if the page actually booted us back to login
+        # Check if the page actually booted us back to login/home
         if not await check_authentication(page):
             if MTF_EMAIL and MTF_PASSWORD:
-                logger.info("Count element missing due to login redirect — re-authenticating...")
+                logger.info("Count element missing due to session drop — re-authenticating...")
                 await login(page, MTF_EMAIL, MTF_PASSWORD)
                 await page.goto(TARGET_DASHBOARD_URL, wait_until="domcontentloaded")
                 await page.wait_for_load_state("networkidle")
-                count_element = await page.query_selector(SITE_WEB_COUNT_SELECTOR)
+                try:
+                    count_element = await page.wait_for_selector(SITE_WEB_COUNT_SELECTOR, timeout=10000)
+                except Exception:
+                    count_element = None
             else:
                 raise AuthenticationError("Session expired during dashboard check.")
 

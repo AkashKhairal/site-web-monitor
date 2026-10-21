@@ -104,12 +104,17 @@ async def get_all_visible_entries(page: Page) -> List[WebsiteEntry]:
         ExtractionError: If the table cannot be found or parsed.
             Never silently returns an empty list when the table is missing.
     """
-    # Verify table exists
-    table = await page.query_selector(HISTORY_TABLE_SELECTOR)
+    # Verify table exists (wait up to 10s for dynamic DataTable initialization)
+    try:
+        table = await page.wait_for_selector(HISTORY_TABLE_SELECTOR, timeout=10000)
+    except Exception:
+        table = None
+
     if table is None:
         raise ExtractionError(
             f"Could not find history table (selector: {HISTORY_TABLE_SELECTOR}). "
-            "The history page HTML structure may have changed."
+            f"Page title: '{await page.title()}', URL: {page.url}. "
+            "The history page HTML structure may have changed or site is slow."
         )
 
     # Show all entries (DataTable defaults to 10 per page)
@@ -214,9 +219,9 @@ async def navigate_to_history(page: Page) -> None:
     await page.goto(history_url, wait_until="domcontentloaded")
     await page.wait_for_load_state("networkidle")
 
-    # Verify we're on the right page
-    current_url = page.url
-    if "/login" in current_url.lower():
+    # Verify we're on the authenticated history page
+    from app.dashboard import check_authentication
+    if not await check_authentication(page):
         from app.auth import AuthenticationError, login
         from app.config import MTF_EMAIL, MTF_PASSWORD
 
@@ -225,9 +230,13 @@ async def navigate_to_history(page: Page) -> None:
             await login(page, MTF_EMAIL, MTF_PASSWORD)
             await page.goto(history_url, wait_until="domcontentloaded")
             await page.wait_for_load_state("networkidle")
+            if not await check_authentication(page):
+                raise AuthenticationError(
+                    f"Session expired and re-login failed to reach history page (URL: {page.url})."
+                )
         else:
             raise AuthenticationError(
-                "Redirected to login while accessing history page."
+                f"Session expired — redirected away from history page (URL: {page.url})."
             )
 
     logger.debug("History page loaded at: %s", page.url)

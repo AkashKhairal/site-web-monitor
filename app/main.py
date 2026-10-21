@@ -369,8 +369,10 @@ class Monitor:
         if self.debug:
             await self._save_debug_snapshot()
 
-        # Only notify once per unique error
-        if error_msg != self._last_error_notified:
+        # Only notify once per unique error, and only if it persists (>= 2 consecutive errors or once mode)
+        # to prevent spurious Telegram alerts from transient network/page load lag.
+        should_notify = (self._consecutive_errors >= 2 or self.once)
+        if should_notify and error_msg != self._last_error_notified:
             await notify_error(
                 f"Dashboard extraction failed: {error_msg[:200]}",
                 dry_run=self.dry_run,
