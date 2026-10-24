@@ -108,6 +108,14 @@ async def login(
         logger.debug("networkidle timeout reached — continuing")
     logger.info("Automated login successful. Current URL: %s", page.url)
 
+    # Persist the freshly authenticated storage state
+    try:
+        AUTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        await page.context.storage_state(path=str(AUTH_STATE_PATH))
+        logger.info("Fresh storage state saved to %s", AUTH_STATE_PATH)
+    except Exception as exc:
+        logger.warning("Could not auto-save storage state: %s", exc)
+
 
 class BrowserManager:
     """Manages Playwright browser lifecycle.
@@ -160,10 +168,10 @@ class BrowserManager:
         return self._page
 
     async def start_authenticated(self, *, headless: bool = True) -> Page:
-        """Launch the browser with automated login or saved authentication state.
+        """Launch the browser with saved authentication state or automated login.
 
-        If MTF_EMAIL and MTF_PASSWORD are configured, performs automated login.
-        Otherwise, falls back to saved storage state in AUTH_STATE_PATH.
+        Prefers saved storage state in AUTH_STATE_PATH to avoid redundant logins.
+        Falls back to automated credential login if no state exists.
 
         Raises:
             FileNotFoundError: If neither credentials nor saved auth state exists.
@@ -177,15 +185,16 @@ class BrowserManager:
                 "Set MTF_EMAIL and MTF_PASSWORD or run 'python -m setup.auth_setup' first."
             )
 
-        if has_creds:
-            # Fresh automated login with credentials
-            page = await self.start(headless=headless)
-            await login(page, MTF_EMAIL, MTF_PASSWORD)
-            await self.save_storage_state(AUTH_STATE_PATH)
-            return page
+        if has_state:
+            # Load from saved session state first
+            logger.info("Starting browser with saved session state from %s", AUTH_STATE_PATH)
+            return await self.start(headless=headless, storage_state=AUTH_STATE_PATH)
 
-        # Fallback to saved storage state
-        return await self.start(headless=headless, storage_state=AUTH_STATE_PATH)
+        # No saved state, but credentials are available
+        logger.info("No saved session state — performing automated login")
+        page = await self.start(headless=headless)
+        await login(page, MTF_EMAIL, MTF_PASSWORD)
+        return page
 
     async def save_storage_state(self, path: Optional[Path] = None) -> None:
         """Save the current browser context's storage state.
